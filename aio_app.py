@@ -10,16 +10,18 @@ class App:
 
     def __init__(self):
         self.shutdown = False
+        self._start_coroutine = None
 
     async def start(self):
         """Start app with this one."""
+        self._start_coroutine = current_task()
         loop = get_running_loop()
         for s in (SIGHUP, SIGINT, SIGTERM):
             loop.add_signal_handler(
                 s,
                 lambda sig=s: create_task(self.graceful_shutdown(sig))
             )
-        return await self.main()
+        await self.main()
 
     @abstractmethod
     async def main(self):
@@ -27,16 +29,17 @@ class App:
         pass
 
     async def graceful_shutdown(self, signal):
+        if self.shutdown:
+            return
         self.shutdown = True
         for hook in App.shutdown_hooks:
             hook(self)
         tasks = [t for t in all_tasks()
-                 if t is not current_task()]
+                 if t not in (current_task(), self._start_coroutine)]
 
         await gather(*tasks, return_exceptions=True)
-        get_running_loop().stop()
         for hook in App.post_shutdown_hooks:
-            hook()
+            hook(self)
 
     @staticmethod
     def worker(method):
